@@ -5,7 +5,8 @@
   </header>
 
   <main class="app-main">
-    <app-code-input></app-code-input>
+    <app-code-input (reviewed)="onReviewed($event)"></app-code-input>
+    <app-review-result [result]="result" [loading]="loading"></app-review-result>
   </main>
 
   <router-outlet></router-outlet>
