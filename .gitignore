@@ -50,3 +50,6 @@ venv/
 # Docker (future)
 # ===============================
 *.pid
+.cache/
+tools/eslint/node_modules/
+backend/test_eslint.js

@@ -23,15 +23,14 @@ def run_semgrep_on_folder(folder: Path) -> Dict[str, Any]:
     local_rules = Path(__file__).resolve().parents[1] / "rules" / "quick-rules.yml"
 
     cmd = [
-    semgrep,
-    "--config",
-    str(local_rules),
-    "--config",
-    "p/ci",
-    "--json",
-    str(folder),
+        semgrep,
+        "--config",
+        str(local_rules),
+        "--config",
+        "p/ci",
+        "--json",
+        str(folder),
     ]
-
 
     # Force UTF-8 so Semgrep doesn't crash on Windows encoding issues
     env = os.environ.copy()
@@ -65,38 +64,74 @@ def run_semgrep_on_folder(folder: Path) -> Dict[str, Any]:
         )
 
 
-def semgrep_results_to_review_items(data: Dict[str, Any]) -> List[Dict[str, str]]:
+def _pretty_path(path_str: str) -> str:
+    """
+    Make the output look professional:
+    - If it's a Windows temp path, show only the filename
+    - Otherwise, show the original
+    """
+    if not path_str:
+        return ""
+    try:
+        p = Path(path_str)
+        # In your project, temp files are often like ...\\Temp\\tmpxxxx\\main.ts
+        # Showing just "main.ts" looks much better
+        return p.name
+    except Exception:
+        return path_str
+
+
+def _normalize_severity(semgrep_sev: str) -> str:
+    s = (semgrep_sev or "").upper()
+    if s in ["ERROR", "CRITICAL", "HIGH"]:
+        return "high"
+    if s in ["WARNING", "MEDIUM"]:
+        return "medium"
+    return "low"
+
+
+def semgrep_results_to_categories(data: Dict[str, Any]) -> Dict[str, List[Dict[str, str]]]:
+    """
+    Convert Semgrep JSON into your response buckets.
+    We categorize a few known rules; everything else stays in security by default.
+    """
     findings = data.get("results", []) or []
-    items: List[Dict[str, str]] = []
+
+    security: List[Dict[str, str]] = []
+    best_practices: List[Dict[str, str]] = []
 
     for f in findings:
         check_id = f.get("check_id", "semgrep.issue")
         message = (f.get("extra", {}) or {}).get("message", "") or "Semgrep finding"
-        severity = ((f.get("extra", {}) or {}).get("severity", "") or "").upper()
+        severity = _normalize_severity(((f.get("extra", {}) or {}).get("severity", "") or ""))
 
-        if severity in ["ERROR", "CRITICAL", "HIGH"]:
-            sev = "high"
-        elif severity in ["WARNING", "MEDIUM"]:
-            sev = "medium"
-        else:
-            sev = "low"
-
-        path = (f.get("path") or "")
+        path = f.get("path") or ""
         start = ((f.get("start") or {}) or {}).get("line")
         end = ((f.get("end") or {}) or {}).get("line")
 
-        where = path
+        pretty_file = _pretty_path(path)
+        where = pretty_file
         if start:
             where += f":{start}"
             if end and end != start:
                 where += f"-{end}"
 
-        items.append(
-            {
-                "title": f"{check_id}",
-                "description": f"{message} ({where})",
-                "severity": sev,
-            }
-        )
+        item = {
+            "title": f"{check_id}",
+            "description": f"{message} ({where})",
+            "severity": severity,
+        }
 
-    return items
+        # Categorization rules:
+        # - eval is security
+        # - console.log is best practice
+        cid = str(check_id).lower()
+        if "no-console" in cid or "console-log" in cid:
+            best_practices.append(item)
+        else:
+            security.append(item)
+
+    return {
+        "security": security,
+        "best_practices": best_practices,
+    }

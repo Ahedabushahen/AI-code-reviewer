@@ -1,4 +1,5 @@
 from typing import Literal, List, Optional
+from pathlib import Path
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -6,7 +7,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from analyzers.temp_project import make_temp_project
-from analyzers.semgrep_runner import run_semgrep_on_folder, semgrep_results_to_review_items
+from analyzers.semgrep_runner import run_semgrep_on_folder, semgrep_results_to_categories
+from analyzers.eslint_runner import run_eslint, eslint_to_schema
 
 load_dotenv()
 
@@ -27,7 +29,7 @@ class ReviewRequest(BaseModel):
 
 
 class ReviewResponse(BaseModel):
-    # We keep ai_used to match your frontend style, but now it means "automated tools used"
+    # ai_used = automated tools used (Semgrep/ESLint), not LLM
     ai_used: bool = False
     ai_error: Optional[str] = None
 
@@ -80,61 +82,120 @@ def review(req: ReviewRequest) -> ReviewResponse:
             ],
         )
 
-    # Create temp folder with a file so semgrep can scan it
+    # Create temp folder with a file so tools can scan it
     temp_dir, folder = make_temp_project(req.language, code)
 
     try:
+        # -------------------------
+        # Semgrep
+        # -------------------------
         semgrep_json = run_semgrep_on_folder(folder)
-        semgrep_items = semgrep_results_to_review_items(semgrep_json)
+        semgrep_cat = semgrep_results_to_categories(semgrep_json)
+        semgrep_security = [ReviewItem(**x) for x in semgrep_cat["security"]]
+        semgrep_best = [ReviewItem(**x) for x in semgrep_cat["best_practices"]]
 
-        # Put all Semgrep findings into "security" for now (we can split later)
-        security_items = [ReviewItem(**x) for x in semgrep_items]
+        # -------------------------
+        # ESLint (best effort)
+        # -------------------------
+        backend_dir = str(Path(__file__).resolve().parent)
+        eslint_error_note: Optional[str] = None
 
-        # Simple scoring: start at 10 and decrease by issues/severity
-        score = 10
-        for it in security_items:
-            if it.severity == "high":
-                score -= 3
-            elif it.severity == "medium":
-                score -= 2
+        eslint_security: List[ReviewItem] = []
+        eslint_bugs: List[ReviewItem] = []
+        eslint_best: List[ReviewItem] = []
+        eslint_perf: List[ReviewItem] = []
+
+        try:
+            # IMPORTANT: use temp_dir.name (temp project root) to ensure ESLint sees generated files
+            eslint_res = run_eslint(project_dir=temp_dir.name, backend_dir=backend_dir)
+
+            if not eslint_res.get("ok", False):
+                eslint_error_note = f"eslint_failed: {str(eslint_res.get('error', 'unknown'))[:160]}"
             else:
-                score -= 1
+                eslint_cat = eslint_to_schema(eslint_res)
+                eslint_security = [ReviewItem(**x) for x in eslint_cat["security"]]
+                eslint_bugs = [ReviewItem(**x) for x in eslint_cat["bugs"]]
+                eslint_best = [ReviewItem(**x) for x in eslint_cat["best_practices"]]
+                eslint_perf = [ReviewItem(**x) for x in eslint_cat["performance"]]
+        except Exception as e:
+            eslint_error_note = f"eslint_failed: {str(e)[:160]}"
+
+        # -------------------------
+        # Merge categories
+        # -------------------------
+        security_items = semgrep_security + eslint_security
+        bugs_items = eslint_bugs
+        best_practices_items = semgrep_best + eslint_best  # ✅ FIX HERE
+        performance_items = eslint_perf
+
+        # -------------------------
+        # Scoring (realistic + capped)
+        # -------------------------
+        all_items = security_items + bugs_items + best_practices_items + performance_items
+
+        # Deduplicate by title so we don't double-penalize similar findings
+        unique_by_title = {}
+        for it in all_items:
+            unique_by_title[it.title] = it
+        all_items = list(unique_by_title.values())
+
+        def penalty(item: ReviewItem) -> int:
+            if item.severity == "high":
+                return 2
+            if item.severity == "medium":
+                return 1
+            return 0
+
+        security_pen = sum(penalty(it) for it in security_items)
+        bugs_pen = sum(penalty(it) for it in bugs_items)
+        perf_pen = sum(penalty(it) for it in performance_items)
+
+        best_pen = sum(penalty(it) for it in best_practices_items)
+        best_pen = min(best_pen, 2)
+
+        total_pen = security_pen + bugs_pen + perf_pen + best_pen
+        score = 10 - total_pen
         score = max(1, min(10, score))
 
+        # -------------------------
+        # Summary
+        # -------------------------
+        total_issues = len(all_items)
         summary = (
             "No major issues found by automated checks."
-            if len(security_items) == 0
+            if total_issues == 0
             else "Automated checks found issues. Review before merging."
         )
 
+        ai_error = eslint_error_note
+
         return ReviewResponse(
             ai_used=True,
-            ai_error=None,
+            ai_error=ai_error,
             score=score,
             summary=summary,
-            bugs=[],
+            bugs=bugs_items,
             security=security_items,
-            performance=[],
-            best_practices=[],
+            performance=performance_items,
+            best_practices=best_practices_items,
         )
 
     except Exception as e:
         return ReviewResponse(
             ai_used=False,
-            ai_error=f"semgrep_failed: {str(e)[:250]}",
+            ai_error=f"analysis_failed: {str(e)[:250]}",
             score=5,
-            summary="Semgrep analysis failed; returned fallback response.",
+            summary="Analysis failed; returned fallback response.",
             bugs=[],
             security=[],
             performance=[],
             best_practices=[
                 ReviewItem(
-                    title="Semgrep failed",
-                    description="Could not run Semgrep on the provided code.",
+                    title="Analysis failed",
+                    description="Could not run automated analysis tools on the provided code.",
                     severity="medium",
                 )
             ],
         )
     finally:
-        # cleanup temp folder
         temp_dir.cleanup()
