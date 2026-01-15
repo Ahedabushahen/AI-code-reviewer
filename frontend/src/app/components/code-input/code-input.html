@@ -1,0 +1,29 @@
+<div class="card">
+  <div class="row">
+    <label>
+      Language
+      <select [(ngModel)]="language">
+        <option value="typescript">TypeScript</option>
+        <option value="javascript">JavaScript</option>
+        <option value="python">Python</option>
+        <option value="java">Java</option>
+        <option value="cpp">C++</option>
+      </select>
+    </label>
+
+    <button (click)="onReview()" [disabled]="loading">
+      {{ loading ? 'Reviewing…' : 'Review' }}
+    </button>
+  </div>
+
+  <label>
+    Code
+    <textarea
+      [(ngModel)]="code"
+      rows="14"
+      placeholder="Paste your code here…"
+    ></textarea>
+  </label>
+
+  <pre class="output" *ngIf="lastPayload">{{ lastPayload | json }}</pre>
+</div>
