@@ -1,0 +1,12 @@
+rules:
+  - id: js.no-eval
+    message: "Avoid eval(): it can execute untrusted code."
+    languages: [javascript, typescript]
+    severity: ERROR
+    pattern: eval(...)
+
+  - id: js.no-console-log
+    message: "Remove console.log before merge (or use a logger)."
+    languages: [javascript, typescript]
+    severity: WARNING
+    pattern: console.log(...)
