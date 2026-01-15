@@ -26,6 +26,10 @@
   </label>
 
   <p class="hint">
-    Right now this returns a <b>mock review</b>. Next we connect it to FastAPI + real AI.
+    This now calls the backend at <b>http://localhost:8000/review</b>.
+  </p>
+
+  <p *ngIf="error" style="margin: 0; color: #b91c1c; font-size: 13px;">
+    {{ error }}
   </p>
 </div>
