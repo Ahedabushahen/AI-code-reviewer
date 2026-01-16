@@ -1,5 +1,7 @@
 from typing import Literal, List, Optional
 from pathlib import Path
+import ast
+import re
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
@@ -64,6 +66,215 @@ def health():
     return {"ok": True}
 
 
+def validate_python_syntax(code: str) -> Optional[str]:
+    """
+    Validate Python code syntax. Returns error message if invalid, None if valid.
+    """
+    try:
+        ast.parse(code)
+        return None
+    except SyntaxError as e:
+        return f"Python syntax error at line {e.lineno}: {e.msg}"
+    except Exception as e:
+        return f"Python parsing error: {str(e)}"
+
+
+def check_undefined_names(code: str) -> Optional[str]:
+    """
+    Check for undefined names in Python code. Returns error message if found, None if OK.
+    """
+    try:
+        tree = ast.parse(code)
+        
+        class NameCollector(ast.NodeVisitor):
+            def __init__(self):
+                self.defined = set()
+                self.used = set()
+            
+            def visit_Import(self, node):
+                # Handle: import os, import sys as s
+                for alias in node.names:
+                    self.defined.add(alias.asname if alias.asname else alias.name)
+                self.generic_visit(node)
+            
+            def visit_ImportFrom(self, node):
+                # Handle: from os import path
+                for alias in node.names:
+                    if alias.name == '*':
+                        # Can't track star imports, skip
+                        pass
+                    else:
+                        self.defined.add(alias.asname if alias.asname else alias.name)
+                self.generic_visit(node)
+            
+            def visit_Name(self, node):
+                if isinstance(node.ctx, ast.Store):
+                    self.defined.add(node.id)
+                elif isinstance(node.ctx, ast.Load):
+                    self.used.add(node.id)
+                self.generic_visit(node)
+            
+            def visit_FunctionDef(self, node):
+                self.defined.add(node.name)
+                # Add function parameters as defined
+                for arg in node.args.args:
+                    self.defined.add(arg.arg)
+                self.generic_visit(node)
+            
+            def visit_AsyncFunctionDef(self, node):
+                self.defined.add(node.name)
+                # Add function parameters as defined
+                for arg in node.args.args:
+                    self.defined.add(arg.arg)
+                self.generic_visit(node)
+            
+            def visit_ClassDef(self, node):
+                self.defined.add(node.name)
+                self.generic_visit(node)
+            
+            def visit_ExceptHandler(self, node):
+                # Handle: except Exception as e
+                if node.name:
+                    self.defined.add(node.name)
+                self.generic_visit(node)
+        
+        collector = NameCollector()
+        collector.visit(tree)
+        
+        # Common Python builtins and special variables
+        builtins_set = {
+            'print', 'len', 'range', 'str', 'int', 'float', 'bool', 'list', 'dict', 'set', 'tuple', 
+            'None', 'True', 'False', 'open', 'input', 'sum', 'min', 'max', 'enumerate', 'zip',
+            'map', 'filter', 'sorted', 'reversed', 'abs', 'round', 'pow', 'divmod', 'isinstance',
+            'issubclass', 'callable', 'hasattr', 'getattr', 'setattr', 'delattr', 'type', 'object',
+            'super', 'property', 'staticmethod', 'classmethod', 'Exception', 'ValueError', 'TypeError',
+            'KeyError', 'IndexError', 'RuntimeError', 'ImportError', 'AttributeError', 'NameError',
+            'StopIteration', 'iter', 'next', 'all', 'any', 'bin', 'hex', 'oct', 'ord', 'chr',
+            'format', 'repr', 'ascii', 'eval', 'exec', 'compile', '__import__', 'vars', 'dir',
+            'id', 'hash', 'bytes', 'bytearray', 'complex', 'memoryview', 'slice', 'frozenset',
+            '__name__', '__file__', '__doc__', '__package__', '__loader__', '__spec__', 'self',
+            'cls', 'BaseException', 'StopAsyncIteration', 'GeneratorExit', 'KeyboardInterrupt',
+            'SystemExit', 'Exception', 'ArithmeticError', 'BufferError', 'LookupError', 'EnvironmentError'
+        }
+        
+        undefined = collector.used - collector.defined - builtins_set
+        
+        if undefined:
+            undefined_list = sorted(list(undefined))
+            return f"Undefined names: {', '.join(undefined_list)}"
+        
+        return None
+    except Exception:
+        # If we can't check, just return None (let other tools catch issues)
+        return None
+
+
+def check_undefined_names_js(code: str) -> Optional[str]:
+    """
+    Smart check for truly undefined names in JavaScript/TypeScript.
+    Only flags variables actually used in code, not keywords or string contents.
+    """
+    try:
+        # All JavaScript/TypeScript keywords to exclude
+        js_keywords = {
+            'abstract', 'arguments', 'await', 'boolean', 'break', 'byte', 'case', 'catch', 'char',
+            'class', 'const', 'continue', 'debugger', 'default', 'delete', 'do', 'double', 'else',
+            'enum', 'eval', 'export', 'extends', 'false', 'final', 'finally', 'float', 'for',
+            'function', 'goto', 'if', 'implements', 'import', 'in', 'instanceof', 'int', 'interface',
+            'let', 'long', 'native', 'new', 'null', 'package', 'private', 'protected', 'public',
+            'return', 'short', 'static', 'super', 'switch', 'synchronized', 'this', 'throw',
+            'throws', 'transient', 'true', 'try', 'typeof', 'var', 'void', 'volatile', 'while',
+            'with', 'yield', 'async', 'from', 'as', 'get', 'set', 'of', 'target', 'readonly',
+            'declare', 'namespace', 'module', 'type', 'keyof', 'unique', 'infer'
+        }
+        
+        # Common JavaScript/TypeScript built-ins and globals
+        js_builtins = {
+            'console', 'print', 'log', 'warn', 'error', 'Array', 'Object', 'String', 'Number', 
+            'Boolean', 'Math', 'JSON', 'Date', 'RegExp', 'Error', 'Function', 'Symbol',
+            'Promise', 'Map', 'Set', 'WeakMap', 'WeakSet', 'ArrayBuffer', 'DataView',
+            'Int8Array', 'Uint8Array', 'Uint8ClampedArray', 'Int16Array', 'Uint16Array',
+            'Int32Array', 'Uint32Array', 'Float32Array', 'Float64Array', 'BigInt64Array',
+            'BigUint64Array', 'Proxy', 'Reflect', 'undefined', 'null', 'true', 'false',
+            'parseInt', 'parseFloat', 'isNaN', 'isFinite', 'encodeURI', 'decodeURI',
+            'encodeURIComponent', 'decodeURIComponent', 'setTimeout', 'setInterval',
+            'clearTimeout', 'clearInterval', 'alert', 'confirm', 'prompt', 'fetch',
+            'window', 'document', 'navigator', 'location', 'localStorage', 'sessionStorage',
+            'XMLHttpRequest', 'FormData', 'Blob', 'FileReader', 'Request', 'Response', 'Headers',
+            'getElementById', 'querySelector', 'querySelectorAll', 'getElementsByClassName',
+            'getElementsByTagName', 'createElement', 'appendChild', 'removeChild', 'innerHTML',
+            'textContent', 'setAttribute', 'getAttribute', 'removeAttribute', 'classList',
+            'addEventListener', 'removeEventListener', 'preventDefault', 'stopPropagation',
+            'then', 'catch', 'finally', 'resolve', 'reject', 'axios', 'fetch',
+            'parse', 'stringify', 'slice', 'splice', 'push', 'pop', 'shift', 'unshift',
+            'map', 'filter', 'reduce', 'forEach', 'find', 'findIndex', 'includes',
+            'indexOf', 'lastIndexOf', 'join', 'split', 'trim', 'toUpperCase', 'toLowerCase',
+            'charAt', 'charCodeAt', 'substring', 'substr', 'replace', 'match', 'search',
+            'startsWith', 'endsWith', 'repeat', 'padStart', 'padEnd', 'hasOwnProperty',
+            'keys', 'values', 'entries', 'assign', 'create', 'defineProperty', 'freeze', 'seal',
+            'isArray', 'write', 'read', 'send', 'open', 'execute', 'express', 'require', 'module'
+        }
+        
+        # Combined exclusion list
+        exclude = js_keywords | js_builtins
+        
+        # Remove all strings and comments to avoid checking string content
+        code_no_strings = re.sub(r'"[^"]*"', '""', code)  # Remove double quoted strings
+        code_no_strings = re.sub(r"'[^']*'", "''", code_no_strings)  # Remove single quoted strings
+        code_no_strings = re.sub(r'`[^`]*`', '``', code_no_strings)  # Remove template strings
+        code_no_strings = re.sub(r'//.*$', '', code_no_strings, flags=re.MULTILINE)  # Remove line comments
+        code_no_strings = re.sub(r'/\*[\s\S]*?\*/', '', code_no_strings)  # Remove block comments
+        
+        # Remove TypeScript type annotations (: type patterns)
+        code_no_strings = re.sub(r':\s*[a-zA-Z_$<>[\]{}|&\s,]*(?=[,;)\]\}])', '', code_no_strings)
+        
+        # Extract variable declarations
+        defined_vars = set()
+        var_decls = re.findall(r'(?:let|const|var)\s+([a-zA-Z_$][a-zA-Z0-9_$]*)', code_no_strings)
+        defined_vars.update(var_decls)
+        
+        # Function declarations
+        func_defs = re.findall(r'function\s+([a-zA-Z_$][a-zA-Z0-9_$]*)', code_no_strings)
+        defined_vars.update(func_defs)
+        
+        # Class declarations
+        class_defs = re.findall(r'class\s+([a-zA-Z_$][a-zA-Z0-9_$]*)', code_no_strings)
+        defined_vars.update(class_defs)
+        
+        # Function parameters
+        param_matches = re.findall(r'\(\s*([^)]+)\s*\)\s*(?:=>|{)', code_no_strings)
+        for params_str in param_matches:
+            params = re.findall(r'([a-zA-Z_$][a-zA-Z0-9_$]*)', params_str)
+            defined_vars.update(params)
+        
+        # Catch block exceptions
+        catch_exceptions = re.findall(r'catch\s*\(\s*([a-zA-Z_$][a-zA-Z0-9_$]*)', code_no_strings)
+        defined_vars.update(catch_exceptions)
+        
+        # Find truly standalone variable references (not part of property access)
+        # Exclude anything preceded by a dot (property/method access)
+        used_vars = set()
+        
+        # Match identifiers NOT preceded by dot
+        # Negative lookbehind: (?<!\.) means "not preceded by dot"
+        standalone = re.findall(r'(?<!\.)(?<!\w)\b([a-zA-Z_$][a-zA-Z0-9_$]*)\b(?!\w)(?!\s*\.)', code_no_strings)
+        used_vars.update(standalone)
+        
+        # Find undefined: used but not defined and not in exclusion list
+        undefined = used_vars - defined_vars - exclude
+        
+        # Additional filters: exclude very short names and obvious false positives
+        undefined = {u for u in undefined if len(u) > 2 or u in ['io', 'fs', 'os', 'db', 'api']}
+        
+        if undefined and len(undefined) > 0:
+            undefined_list = sorted(list(undefined))
+            return f"Undefined names: {', '.join(undefined_list)}"
+        
+        return None
+    except Exception:
+        return None
+
+
 @app.post("/review", response_model=ReviewResponse)
 def review(req: ReviewRequest) -> ReviewResponse:
     code = req.content or ""
@@ -85,6 +296,62 @@ def review(req: ReviewRequest) -> ReviewResponse:
                 )
             ],
         )
+
+    # -------------------------
+    # Validate Python syntax if language is Python
+    # -------------------------
+    is_python = req.language.strip().lower() in ["python", "py"]
+    if is_python:
+        syntax_error = validate_python_syntax(code)
+        if syntax_error:
+            return ReviewResponse(
+                ai_used=True,
+                ai_error=None,
+                score=2,
+                summary=f"Python code has syntax errors: {syntax_error}",
+                recommendation="review_required",
+                bugs=[
+                    ReviewItem(
+                        title="Syntax Error",
+                        description=syntax_error,
+                        severity="high",
+                    )
+                ],
+                security=[],
+                performance=[],
+                best_practices=[],
+            )
+        
+        # Let Bandit and Semgrep handle semantic checks - skip hardcoded validation
+
+    # Check for trivial code (single identifier or very short)
+    lines = [l.strip() for l in code.split('\n') if l.strip()]
+    if len(lines) == 1 and len(lines[0]) < 10 and not any(c in lines[0] for c in '()[]{}:='):
+        return ReviewResponse(
+            ai_used=True,
+            ai_error=None,
+            score=3,
+            summary="Code snippet is too trivial to review. Please provide meaningful code with logic.",
+            recommendation="review_required",
+            bugs=[
+                ReviewItem(
+                    title="Trivial Code",
+                    description="Single identifier or very short snippet is not meaningful code. Add functions, classes, or logic.",
+                    severity="medium",
+                )
+            ],
+            security=[],
+            performance=[],
+            best_practices=[],
+        )
+
+    # -------------------------
+    # Check for undefined names in JavaScript/TypeScript
+    # -------------------------
+    is_js = req.language.strip().lower() in ["javascript", "js", "typescript", "ts"]
+    if is_js:
+        # Let ESLint handle this - skip hardcoded check
+        pass
 
     # Create temp folder with a file so tools can scan it
     temp_dir, folder = make_temp_project(req.language, code)
@@ -128,7 +395,6 @@ def review(req: ReviewRequest) -> ReviewResponse:
         bandit_error_note: Optional[str] = None
         bandit_security: List[ReviewItem] = []
 
-        is_python = req.language.strip().lower() in ["python", "py"]
         if is_python:
             try:
                 bandit_res = run_bandit(project_dir=temp_dir.name)
