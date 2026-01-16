@@ -9,10 +9,12 @@ from pydantic import BaseModel, Field
 from analyzers.temp_project import make_temp_project
 from analyzers.semgrep_runner import run_semgrep_on_folder, semgrep_results_to_categories
 from analyzers.eslint_runner import run_eslint, eslint_to_schema
+from analyzers.bandit_runner import run_bandit, bandit_to_schema
 
 load_dotenv()
 
 Severity = Literal["low", "medium", "high"]
+Recommendation = Literal["block_merge", "review_required", "ok"]
 
 
 class ReviewItem(BaseModel):
@@ -29,12 +31,13 @@ class ReviewRequest(BaseModel):
 
 
 class ReviewResponse(BaseModel):
-    # ai_used = automated tools used (Semgrep/ESLint), not LLM
+    # ai_used = automated tools used (Semgrep/ESLint/Bandit), not LLM
     ai_used: bool = False
     ai_error: Optional[str] = None
 
     score: int = Field(ge=1, le=10)
     summary: str
+    recommendation: Recommendation = "ok"
 
     bugs: List[ReviewItem] = []
     security: List[ReviewItem] = []
@@ -70,6 +73,7 @@ def review(req: ReviewRequest) -> ReviewResponse:
             ai_error=None,
             score=1,
             summary="No code provided. Paste some code to get a review.",
+            recommendation="review_required",
             bugs=[],
             security=[],
             performance=[],
@@ -106,9 +110,7 @@ def review(req: ReviewRequest) -> ReviewResponse:
         eslint_perf: List[ReviewItem] = []
 
         try:
-            # IMPORTANT: use temp_dir.name (temp project root) to ensure ESLint sees generated files
             eslint_res = run_eslint(project_dir=temp_dir.name, backend_dir=backend_dir)
-
             if not eslint_res.get("ok", False):
                 eslint_error_note = f"eslint_failed: {str(eslint_res.get('error', 'unknown'))[:160]}"
             else:
@@ -121,11 +123,29 @@ def review(req: ReviewRequest) -> ReviewResponse:
             eslint_error_note = f"eslint_failed: {str(e)[:160]}"
 
         # -------------------------
+        # Bandit (Python only, best effort)
+        # -------------------------
+        bandit_error_note: Optional[str] = None
+        bandit_security: List[ReviewItem] = []
+
+        is_python = req.language.strip().lower() in ["python", "py"]
+        if is_python:
+            try:
+                bandit_res = run_bandit(project_dir=temp_dir.name)
+                if not bandit_res.get("ok", False):
+                    bandit_error_note = f"bandit_failed: {str(bandit_res.get('error', 'unknown'))[:160]}"
+                else:
+                    bandit_cat = bandit_to_schema(bandit_res)
+                    bandit_security = [ReviewItem(**x) for x in bandit_cat["security"]]
+            except Exception as e:
+                bandit_error_note = f"bandit_failed: {str(e)[:160]}"
+
+        # -------------------------
         # Merge categories
         # -------------------------
-        security_items = semgrep_security + eslint_security
+        security_items = semgrep_security + eslint_security + bandit_security
         bugs_items = eslint_bugs
-        best_practices_items = semgrep_best + eslint_best  # ✅ FIX HERE
+        best_practices_items = semgrep_best + eslint_best
         performance_items = eslint_perf
 
         # -------------------------
@@ -167,13 +187,31 @@ def review(req: ReviewRequest) -> ReviewResponse:
             else "Automated checks found issues. Review before merging."
         )
 
-        ai_error = eslint_error_note
+        # -------------------------
+        # Recommendation (CI-friendly)
+        # -------------------------
+        has_high_security = any(it.severity == "high" for it in security_items)
+        if has_high_security:
+            recommendation: Recommendation = "block_merge"
+        elif score <= 6:
+            recommendation = "review_required"
+        else:
+            recommendation = "ok"
+
+        # Combine tool error notes (if any)
+        notes = []
+        if eslint_error_note:
+            notes.append(eslint_error_note)
+        if bandit_error_note:
+            notes.append(bandit_error_note)
+        ai_error = "; ".join(notes) if notes else None
 
         return ReviewResponse(
             ai_used=True,
             ai_error=ai_error,
             score=score,
             summary=summary,
+            recommendation=recommendation,
             bugs=bugs_items,
             security=security_items,
             performance=performance_items,
@@ -186,6 +224,7 @@ def review(req: ReviewRequest) -> ReviewResponse:
             ai_error=f"analysis_failed: {str(e)[:250]}",
             score=5,
             summary="Analysis failed; returned fallback response.",
+            recommendation="review_required",
             bugs=[],
             security=[],
             performance=[],
