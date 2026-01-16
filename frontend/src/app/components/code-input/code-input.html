@@ -6,18 +6,17 @@
         <option value="typescript">TypeScript</option>
         <option value="javascript">JavaScript</option>
         <option value="python">Python</option>
-        <option value="java">Java</option>
-        <option value="cpp">C++</option>
       </select>
     </label>
 
     <button (click)="onReview()" [disabled]="loading">
-      {{ loading ? 'Reviewing…' : 'Review' }}
+      <span *ngIf="!loading">🔍 Review Code</span>
+      <span *ngIf="loading">⏳ Reviewing…</span>
     </button>
   </div>
 
   <label>
-    Code
+    Code Snippet
     <textarea
       [(ngModel)]="code"
       rows="14"
@@ -26,10 +25,10 @@
   </label>
 
   <p class="hint">
-    This now calls the backend at <b>http://localhost:8000/review</b>.
+    Backend: <b>http://localhost:8000/review</b>
   </p>
 
-  <p *ngIf="error" style="margin: 0; color: #b91c1c; font-size: 13px;">
-    {{ error }}
-  </p>
+  <div *ngIf="error" style="padding: 12px; background: #fee2e2; border: 1px solid #fca5a5; border-radius: 12px; color: #991b1b; font-size: 13px; font-weight: 500; margin-top: 8px;">
+    ❌ {{ error }}
+  </div>
 </div>

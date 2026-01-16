@@ -1,29 +1,29 @@
 <div class="panel">
   <div *ngIf="loading" class="loading">
-    Reviewing… (mock result for now)
+    ⏳ Analyzing your code… please wait
   </div>
 
   <div *ngIf="!loading && !result" class="empty">
-    No review yet. Paste code and click <b>Review</b>.
+    📝 No review yet<br><span style="font-size: 12px; font-weight: normal; margin-top: 4px; display: block;">Paste code and click <b>Review Code</b></span>
   </div>
 
   <div *ngIf="!loading && result" class="result">
     <div class="top">
       <div>
-        <h2>Review Result</h2>
+        <h2>✓ Review Complete</h2>
         <p class="summary">{{ result.summary }}</p>
       </div>
 
       <div class="score">
-        <div class="score-num">{{ result.score }}/10</div>
-        <div class="score-label">Score</div>
+        <div class="score-num">{{ result.score }}</div>
+        <div class="score-label">/ 10 Score</div>
       </div>
     </div>
 
     <div class="grid">
       <section class="box">
-        <h3>Bugs</h3>
-        <div *ngIf="result.bugs.length === 0" class="none">No bugs found.</div>
+        <h3>🐛 Bugs</h3>
+        <div *ngIf="result.bugs.length === 0" class="none">No bugs detected</div>
         <ul>
           <li *ngFor="let item of result.bugs">
             <span class="sev" [attr.data-sev]="item.severity">{{ item.severity }}</span>
@@ -34,8 +34,8 @@
       </section>
 
       <section class="box">
-        <h3>Security</h3>
-        <div *ngIf="result.security.length === 0" class="none">No security issues found.</div>
+        <h3>🔒 Security</h3>
+        <div *ngIf="result.security.length === 0" class="none">No security issues found</div>
         <ul>
           <li *ngFor="let item of result.security">
             <span class="sev" [attr.data-sev]="item.severity">{{ item.severity }}</span>
@@ -46,8 +46,8 @@
       </section>
 
       <section class="box">
-        <h3>Performance</h3>
-        <div *ngIf="result.performance.length === 0" class="none">No performance issues found.</div>
+        <h3>⚡ Performance</h3>
+        <div *ngIf="result.performance.length === 0" class="none">No performance issues found</div>
         <ul>
           <li *ngFor="let item of result.performance">
             <span class="sev" [attr.data-sev]="item.severity">{{ item.severity }}</span>
@@ -58,8 +58,8 @@
       </section>
 
       <section class="box">
-        <h3>Best Practices</h3>
-        <div *ngIf="result.best_practices.length === 0" class="none">No best-practice notes.</div>
+        <h3>⭐ Best Practices</h3>
+        <div *ngIf="result.best_practices.length === 0" class="none">All best practices followed</div>
         <ul>
           <li *ngFor="let item of result.best_practices">
             <span class="sev" [attr.data-sev]="item.severity">{{ item.severity }}</span>
