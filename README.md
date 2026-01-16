@@ -36,7 +36,7 @@ Features
   * Posts a summary comment with score and recommendation
   * Can block merges when critical issues are detected
 
-* Frontend UI (Angular)
+* Frontend UI (Angular) 
 
   * Displays findings by category
   * Shows score and recommendation clearly
