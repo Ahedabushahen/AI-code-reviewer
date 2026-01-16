@@ -1,7 +1,3 @@
-Here is the **full README content as plain text**, ready to paste directly into `README.md` (no markdown tricks, just clean professional text):
-
----
-
 AI Code Reviewer
 
 An automated, CI-ready code review system built with FastAPI and Angular that analyzes source code using static analysis tools and provides a clear merge recommendation for pull requests.
