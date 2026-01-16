@@ -2,7 +2,7 @@ AI Code Reviewer
 
 An automated, CI-ready code review system built with FastAPI and Angular that analyzes source code using static analysis tools and provides a clear merge recommendation for pull requests.
 
-This project focuses on deterministic, tool-based analysis (not LLM-generated reviews) and is designed to behave like a real production-grade code review gate.
+This project focuses on deterministic, tool-based analysis and is designed to behave like a real production-grade code review gate.
 
 ---
 
@@ -41,8 +41,6 @@ Features
 
 Design Principles
 
-* No paid APIs
-* No LLM dependency
 * Deterministic and explainable results
 * Production-style CI behavior
 * Cross-platform (Windows and Linux)
